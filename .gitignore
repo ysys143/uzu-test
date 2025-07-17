@@ -1,0 +1,57 @@
+# Environment variables
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+._*
+
+# Logs
+*.log
+
+# Database files
+*.db
+*.sqlite
+
+# Cache
+.cache/
+*.cache
+
+# Temporary files
+*.tmp
+*.temp
+
+# Model files (large binaries)
+*.bin
+*.safetensors
+models/
+
+# External repositories  
+lalamo/
+uzu/
+
+# JSON benchmark results (keep markdown reports)
+benchmark_results_*.json
