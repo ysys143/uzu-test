@@ -47,7 +47,7 @@ class MultiRunBenchmarkRunner:
         os.makedirs('output', exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.log_filename = f"{logging_config['directory']}/benchmark_detailed_{timestamp}.log"
+        self.log_filename = f"{logging_config['directory']}/subprocess_benchmark_detailed_{timestamp}.log"
         self.timestamp = timestamp
         
         # 로깅 설정
@@ -718,7 +718,7 @@ class MultiRunBenchmarkRunner:
         
         # Markdown 파일 저장 (report/ 디렉토리에)
         quick_suffix = "_quick" if self.quick_test else ""
-        md_file = f'report/benchmark_report_{self.num_runs}runs{quick_suffix}_{self.timestamp}.md'
+        md_file = f'report/subprocess_benchmark_report_{self.num_runs}runs{quick_suffix}_{self.timestamp}.md'
         with open(md_file, 'w', encoding='utf-8') as f:
             f.write(md_content)
         
@@ -749,7 +749,7 @@ class MultiRunBenchmarkRunner:
             }
         
         # JSON 파일 저장 (output/ 디렉토리에)
-        json_file = f'output/benchmark_results_{self.num_runs}runs{quick_suffix}_{self.timestamp}.json'
+        json_file = f'output/subprocess_benchmark_results_{self.num_runs}runs{quick_suffix}_{self.timestamp}.json'
         with open(json_file, 'w', encoding='utf-8') as f:
             json.dump(detailed_results, f, indent=2, ensure_ascii=False)
         
@@ -994,7 +994,7 @@ class MultiRunBenchmarkRunner:
         quick_suffix = "_quick" if self.quick_test else ""
         md_content += f"\n---\n\n"
         md_content += f"**데이터 파일**\n"
-        md_content += f"- JSON 데이터: `output/benchmark_results_{self.num_runs}runs{quick_suffix}_{self.timestamp}.json`\n"
+        md_content += f"- JSON 데이터: `output/subprocess_benchmark_results_{self.num_runs}runs{quick_suffix}_{self.timestamp}.json`\n"
         md_content += f"- 상세 로그: `{self.log_filename}`\n\n"
         md_content += f"*리포트 생성 시간: {timestamp}*\n"
         

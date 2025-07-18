@@ -1,1 +1,5 @@
-7가지 방식(server+subprocess)으로 10개 프롬프트에 대해 각각 30번씩 테스트하고, 그 결과를 보고서로 작성해줘.
+- ✅ python api_benchmark.py 3 && python subprocess_benchmark.py 3
+
+- ✅ api와 subprocess 모드 report를 바탕으로 종합보고서를 생성.
+
+- ✅ README에 반영. 먼저 결과를 설명하고, 그 다음 현재 작성된 방법에 대한 내용을 이어나가도록 편성.

@@ -488,11 +488,11 @@ class APIBenchmarkRunner:
         # Latency 기준 정렬 (낮은 순)
         sorted_servers_latency = sorted(
             [(server, data) for server, data in self.results.items()], 
-            key=lambda x: x[1]['statistics']['response_time']['mean']
+            key=lambda x: x[1]['statistics']['inference_time']['mean']
         )
         
         for rank, (server_name, data) in enumerate(sorted_servers_latency, 1):
-            latency_stats = data['statistics']['response_time']
+            latency_stats = data['statistics']['inference_time']
             avg_latency = latency_stats['mean']
             min_latency = latency_stats['min']
             max_latency = latency_stats['max']
@@ -509,7 +509,7 @@ class APIBenchmarkRunner:
         for server_name, data in self.results.items():
             engine_name = data['engine']
             tps_stats = data['statistics']['tps']
-            latency_stats = data['statistics']['response_time']
+            latency_stats = data['statistics']['inference_time']
             
             md_content += f"### {engine_name}\n\n"
             
@@ -531,7 +531,7 @@ class APIBenchmarkRunner:
         
         md_content += f"### 성능 우수 서버\n\n"
         md_content += f"- **최고 처리량**: {best_tps_name} ({self.results[best_tps_server]['statistics']['tps']['mean']:.2f} TPS)\n"
-        md_content += f"- **최단 응답시간**: {best_latency_name} ({self.results[best_latency_server]['statistics']['response_time']['mean']:.3f}초)\n\n"
+        md_content += f"- **최단 응답시간**: {best_latency_name} ({self.results[best_latency_server]['statistics']['inference_time']['mean']:.3f}초)\n\n"
         
         # 성능 일관성 분석
         md_content += "### 성능 안정성 분석\n\n"
@@ -539,7 +539,7 @@ class APIBenchmarkRunner:
         for server_name, data in self.results.items():
             engine_name = data['engine']
             tps_cv = data['statistics']['tps']['std'] / data['statistics']['tps']['mean'] if data['statistics']['tps']['mean'] > 0 else 0
-            latency_cv = data['statistics']['response_time']['std'] / data['statistics']['response_time']['mean'] if data['statistics']['response_time']['mean'] > 0 else 0
+            latency_cv = data['statistics']['inference_time']['std'] / data['statistics']['inference_time']['mean'] if data['statistics']['inference_time']['mean'] > 0 else 0
             stability_analysis.append((engine_name, tps_cv, latency_cv))
         
         # CV(변동계수) 기준 정렬
@@ -556,14 +556,14 @@ class APIBenchmarkRunner:
         for rank, (server, data) in enumerate(sorted_servers_tps[:3], 1):
             engine_name = data['engine']
             avg_tps = data['statistics']['tps']['mean']
-            avg_latency = data['statistics']['response_time']['mean']
+            avg_latency = data['statistics']['inference_time']['mean']
             md_content += f"{rank}. **{engine_name}**: {avg_tps:.2f} TPS, {avg_latency:.1f}초 지연\n"
         
         md_content += "\n### 응답속도 우선 (실시간 API)\n"
         for rank, (server, data) in enumerate(sorted_servers_latency[:3], 1):
             engine_name = data['engine']
             avg_tps = data['statistics']['tps']['mean']
-            avg_latency = data['statistics']['response_time']['mean']
+            avg_latency = data['statistics']['inference_time']['mean']
             md_content += f"{rank}. **{engine_name}**: {avg_latency:.3f}초 지연, {avg_tps:.1f} TPS\n"
         
         md_content += "\n### 안정성 우선 (프로덕션 API)\n"
@@ -579,7 +579,7 @@ class APIBenchmarkRunner:
         for server_name, data in self.results.items():
             engine_name = data['engine']
             tps_score = data['statistics']['tps']['mean'] / max(d['statistics']['tps']['mean'] for d in self.results.values())
-            latency_score = min(d['statistics']['response_time']['mean'] for d in self.results.values()) / data['statistics']['response_time']['mean']
+            latency_score = min(d['statistics']['inference_time']['mean'] for d in self.results.values()) / data['statistics']['inference_time']['mean']
             overall_score = (tps_score + latency_score) / 2  # 균등 가중치
             overall_scores.append((engine_name, overall_score, tps_score, latency_score))
         

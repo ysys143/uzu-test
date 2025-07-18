@@ -2,31 +2,74 @@
 
 Apple Silicon (M3 Max)에서 다양한 AI 추론 엔진들의 성능을 비교하는 벤치마크 시스템입니다.
 
-## 📊 프로젝트 개요
+## 📊 핵심 성능 결과
 
-**목표**: Uzu, PyTorch, Ollama, llama.cpp의 Apple Silicon 최적화 성능 비교  
+**테스트 환경**: MacBook Pro (Mac15,10), Apple M3 Max, 14코어 CPU, 36GB RAM  
 **테스트 모델**: Google Gemma-3-1B-IT  
-**테스트 환경**: macOS (Apple Silicon M3 Max)  
-**측정 지표**: TPS (Tokens Per Second), 추론 시간, 메모리 사용량
+**측정 지표**: TPS (Tokens Per Second), 추론 시간(Latency)  
+**실행 횟수**: 각 모드별 3회 반복, 10개 프롬프트 테스트
 
-## 🏗️ 서빙 방식 개요
+### 🥇 CLI 모드 (최고 성능)
+| 순위 | 엔진 | 평균 TPS | 상대 성능 | 평균 Latency |
+|------|------|----------|----------|--------------|
+| 1위 | **Ollama** | 136.68 | 15.4x | 4.86초 |
+| 2위 | **llama.cpp** | 121.02 | 13.6x | 5.03초 |
+| 3위 | **PyTorch** | 8.87 | 1.0x | 35.57초 |
 
-### 1. CLI 기반 서빙 (Subprocess 벤치마크)
+### 🌐 API 모드 (서버 성능)
+| 순위 | 엔진 | 평균 TPS | 상대 성능 | 평균 Latency |
+|------|------|----------|----------|--------------|
+| 1위 | **llama.cpp** | 75.69 | 9.2x | 5.76초 |
+| 2위 | **Ollama** | 72.97 | 8.9x | 4.57초 |
+| 3위 | **Uzu** | 35.36 | 4.3x | 5.48초 |
+| 4위 | **PyTorch** | 8.20 | 1.0x | 50.74초 |
 
+### 🔍 주요 발견사항
+
+1. **Metal 가속 효과**: llama.cpp, Ollama에서 PyTorch 대비 **10-15배 성능 향상**
+2. **API 오버헤드**: HTTP 서버 모드에서 평균 **20-40% 성능 저하**
+3. **안정성 차이**: llama.cpp API 모드가 가장 안정적 (변동성 21.7%)
+4. **Uzu 특징**: API 전용, 중간 성능, 네이티브 Metal 최적화
+
+### 📈 CLI vs API 성능 비교
+
+**처리량 변화**
+- **Ollama**: 136.68 → 72.97 TPS (-46.6%)
+- **llama.cpp**: 121.02 → 75.69 TPS (-37.5%)
+- **PyTorch**: 8.87 → 8.20 TPS (-7.6%)
+
+**응답 속도 변화**
+- **Ollama**: 4.86 → 4.57초 (+6.0% 개선)
+- **llama.cpp**: 5.03 → 5.76초 (-14.5% 저하)
+- **PyTorch**: 35.57 → 50.74초 (-42.7% 저하)
+
+---
+
+## 🏗️ 벤치마크 시스템 개요
+
+### 목표
+- Uzu, PyTorch, Ollama, llama.cpp의 Apple Silicon 최적화 성능 비교
+- CLI 기반과 API 기반 서빙 방식의 성능 차이 분석
+- 공정한 비교를 위한 통일된 측정 환경 구축
+
+### 서빙 방식
+
+#### 1. CLI 기반 서빙 (Subprocess 벤치마크)
 순수한 CLI 성능을 측정하는 방식으로, 각 엔진의 최적화된 명령행 도구를 직접 실행합니다.
 
 1. **PyTorch + MPS**: HuggingFace Transformers + Apple Metal Performance Shaders
 2. **Ollama CLI**: GGUF 모델을 통한 대화형 추론
 3. **llama.cpp CLI**: Metal 가속 활용한 직접 추론
 
-### 2. API 기반 서빙 (API 벤치마크)
-
+#### 2. API 기반 서빙 (API 벤치마크)
 HTTP API를 통한 서버 모드 성능을 측정하는 방식입니다.
 
 4. **PyTorch Server**: FastAPI 기반 OpenAI 호환 서버
 5. **Ollama Server**: 내장 HTTP 서버 모드
 6. **llama.cpp Server**: llama-server를 통한 HTTP API
 7. **Uzu Server**: Rust 기반 네이티브 Metal 서버
+
+---
 
 ## 🛠️ 시스템 요구사항
 
@@ -465,25 +508,6 @@ python3 server_manager.py
 python3 pytorch_server.py --port 8001 --model-path ./models/gemma-3-1b-it
 ```
 
-## 📈 결과 분석
-
-### 최신 성능 결과 (2025-07-18)
-
-#### CLI 모드 성능 (Subprocess)
-| 엔진 | 평균 TPS | 상대 성능 | 특징 |
-|------|----------|----------|------|
-| PyTorch + MPS | 7.31 | 1.0x (기준) | 높은 품질, 느린 속도 |
-| Ollama (GGUF) | 74.49 | 10.2x | 균형잡힌 성능 |
-| llama.cpp (Metal) | 2,337.30 | 319.5x | 압도적 속도 |
-
-#### API 모드 성능 (Server)
-| 엔진 | 평균 TPS | 상대 성능 | 특징 |
-|------|----------|----------|------|
-| PyTorch Server | 7.27 | 1.0x (기준) | OpenAI 호환 API |
-| Ollama Server | 46.59 | 6.4x | 멀티클라이언트 지원 |
-| llama.cpp Server | 71.52 | 9.8x | HTTP 오버헤드 존재 |
-| Uzu Server | 26.78 | 3.7x | 네이티브 Metal 최적화 |
-
 ### 결과 파일
 
 벤치마크 실행 후 다음 파일들이 생성됩니다:
@@ -591,15 +615,22 @@ uzu/
 ├── server_manager.py          # 서버 관리
 ├── pytorch_server.py          # PyTorch 서버
 ├── benchmark_prompts.py       # 구조화된 프롬프트 시스템
-├── benchmark_usage.md         # 상세 사용법 가이드
+├── test_uzu_only.py           # Uzu 단독 테스트
+├── README.md                  # 프로젝트 문서
+├── benchmark/                 # Python 벤치마크 패키지
+│   └── pyproject.toml        # 의존성 관리
 ├── models/                    # 모델 저장소
 │   ├── gemma-3-1b-it/        # HuggingFace 원본
 │   ├── gemma-3-1b-it-uzu/    # Uzu 형식
 │   ├── gemma-3-1b-it-gguf-llama/ # llama.cpp GGUF
+│   ├── temp_llama_cpp/       # llama.cpp 임시 파일
 │   └── Modelfile             # Ollama 모델 설정
+├── uzu/                      # Uzu 엔진 소스코드
+├── lalamo/                   # 모델 변환 도구
 ├── report/                   # Markdown 리포트
 ├── output/                   # JSON 결과 데이터
-└── logging/                  # 상세 로그
+├── logging/                  # 상세 로그
+└── plan                      # 개발 계획 노트
 ```
 
 ### 프롬프트 시스템 설계 철학
@@ -622,5 +653,31 @@ uzu/
 
 ---
 
-**마지막 업데이트**: 2025-07-18 15:12:56  
+## 📋 프로젝트 완료 현황
+
+### ✅ 완료된 주요 작업들
+
+1. **✅ 벤치마크 실행**: `python api_benchmark.py 3 && python subprocess_benchmark.py 3`
+   - API 모드와 CLI 모드 각각 3회 반복 실행으로 안정적인 성능 데이터 수집
+   - 총 210회 테스트 실행 (API 120회 + Subprocess 90회)
+
+2. **✅ 종합보고서 생성**: API와 subprocess 모드 report를 바탕으로 종합보고서를 생성
+   - 두 벤치마크 결과를 통합 분석한 종합 성능 보고서 완성
+   - CLI vs API 성능 차이, 엔진별 특성, 안정성 분석 포함
+
+3. **✅ README 재편성**: 먼저 결과를 설명하고, 그 다음 현재 작성된 방법에 대한 내용을 이어나가도록 편성
+   - 핵심 성능 결과를 최상단에 배치하여 즉시 확인 가능
+   - 벤치마크 방법론과 설치 가이드를 그 다음에 체계적으로 구성
+
+## 📖 상세 분석 보고서
+
+벤치마크 결과에 대한 자세한 분석은 다음 보고서를 참조하세요:
+
+- **종합 분석**: [`report/uzu_comprehensive_benchmark_analysis_20250718.md`](report/uzu_comprehensive_benchmark_analysis_20250718.md)
+- **API 벤치마크**: [`report/api_benchmark_report_3runs_20250718_211148.md`](report/api_benchmark_report_3runs_20250718_211148.md)  
+- **CLI 벤치마크**: [`report/subprocess_benchmark_report_3runs_20250718_214515.md`](report/subprocess_benchmark_report_3runs_20250718_214515.md)
+
+---
+
+**마지막 업데이트**: 2025-07-18 22:30:00  
 **테스트 환경**: macOS 15.5, Apple M3 Max, 36GB RAM 
