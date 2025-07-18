@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
+import requests
 
 
 class MultiRunBenchmarkRunner:
@@ -29,12 +30,12 @@ class MultiRunBenchmarkRunner:
         self.num_runs = num_runs
         self.test_prompts = [
             "안녕하세요! 반갑습니다.",
-            "배고프다. 점심메뉴 추천해줘.",
-            "파이썬으로 간단한 웹서버 만드는 방법 알려줘.",
-            "오늘 날씨가 좋은데 뭘 할까?",
-            "AI의 미래에 대해 어떻게 생각해?"
+            # "배고프다. 점심메뉴 추천해줘.",
+            # "파이썬으로 간단한 웹서버 만드는 방법 알려줘.",
+            # "오늘 날씨가 좋은데 뭘 할까?",
+            # "AI의 미래에 대해 어떻게 생각해?"
         ]
-        self.max_tokens = 50
+        self.max_tokens = 15000
         self.results = {}
         
     def calculate_statistics(self, values: List[float]) -> Dict:
@@ -104,8 +105,12 @@ class MultiRunBenchmarkRunner:
                 output_tokens = len(outputs[0]) - input_tokens
                 tps = output_tokens / inference_time if inference_time > 0 else 0
                 
-                # 디버깅 정보 출력
+                # 응답 내용 로깅 (토큰 수 확인용)
+                response_length = len(response.split()) if response else 0
                 print(f"    프롬프트 {prompt_idx + 1}: {inference_time:.3f}초, {output_tokens}토큰, {tps:.2f} TPS")
+                print(f"    응답 길이: {response_length}단어, {len(response)}자")
+                print(f"    응답 내용: {response}")
+                print("    " + "-" * 60)
                 
                 run_results.append({
                     'prompt_idx': prompt_idx,
@@ -203,8 +208,12 @@ class MultiRunBenchmarkRunner:
                                 if line.strip() and not line.startswith('>>>'):
                                     response += line + " "
                         
-                        # 디버깅 정보 출력
+                        # 응답 내용 로깅 (토큰 수 확인용)
+                        response_length = len(response.split()) if response else 0
                         print(f"    프롬프트 {prompt_idx + 1}: {inference_time:.3f}초, {eval_rate:.2f} TPS")
+                        print(f"    응답 길이: {response_length}단어, {len(response)}자")
+                        print(f"    응답 내용: {response}")
+                        print("    " + "-" * 60)
                         
                         run_results.append({
                             'prompt_idx': prompt_idx,
@@ -270,7 +279,8 @@ class MultiRunBenchmarkRunner:
                     '--temp', '0.7',
                     '-ngl', '99',
                     '--no-display-prompt',
-                    '-no-cnv'
+                    '--chat-template', 'gemma',
+                    '-st'  # single-turn mode
                 ]
                 
                 start_time = time.time()
@@ -301,8 +311,12 @@ class MultiRunBenchmarkRunner:
                         
                         response = result.stdout.strip()
                         
-                        # 디버깅 정보 출력
+                        # 응답 내용 로깅 (토큰 수 확인용)
+                        response_length = len(response.split()) if response else 0
                         print(f"    프롬프트 {prompt_idx + 1}: {inference_time:.3f}초, {tps:.2f} TPS")
+                        print(f"    응답 길이: {response_length}단어, {len(response)}자")
+                        print(f"    응답 내용: {response}")
+                        print("    " + "-" * 60)
                         
                         run_results.append({
                             'prompt_idx': prompt_idx,
@@ -350,49 +364,136 @@ class MultiRunBenchmarkRunner:
         print(f"✅ llama.cpp 완료 - 전체 평균 TPS: {avg_tps:.2f}")
         
     def test_uzu_multi_run(self):
-        """Uzu 다중 실행 테스트"""
+        """Uzu 다중 실행 테스트 (서버 모드 사용)"""
         print(f"⚡ Uzu {self.num_runs}회 반복 테스트 시작...")
-        print("  주의: Uzu는 현재 수동 측정값을 사용합니다.")
+        print("  Uzu 서버 시작 중...")
         
-        all_runs = []
-        tps_values = []
-        inference_times = []
+        # Uzu 서버 시작
+        import signal
+        import threading
+        import requests
+        import os
         
-        # 이전 테스트 결과를 기반으로 한 시뮬레이션 (실제 구현 시 교체 필요)
-        base_tps = 76.6
-        base_inference_time = 0.65
+        # 환경변수 설정 (실제로는 포트 8000 사용)
+        env = os.environ.copy()
+        env['ROCKET_PORT'] = '8000'
         
-        for run_idx in range(self.num_runs):
-            print(f"  실행 {run_idx + 1}/{self.num_runs}...")
-            run_results = []
+        server_process = subprocess.Popen(
+            ['./uzu/target/release/uzu_cli', 'serve', './models/gemma-3-1b-it-uzu'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env
+        )
+        
+        # 서버가 시작될 때까지 대기
+        import time
+        server_ready = False
+        for i in range(30):  # 30초 대기
+            try:
+                response = requests.get('http://localhost:8000/', timeout=2)
+                print(f"  서버 응답: {response.status_code}")
+                server_ready = True
+                break
+            except requests.exceptions.ConnectionError:
+                print(f"    서버 시작 대기 중... ({i+1}/30)")
+                time.sleep(1)
+            except Exception as e:
+                print(f"    예외 발생: {e}")
+                time.sleep(1)
+        
+        if not server_ready:
+            print("    에러: Uzu 서버 시작 실패")
+            print("  서버 프로세스 상태:")
+            print(f"    - 반환코드: {server_process.poll()}")
+            try:
+                stdout, stderr = server_process.communicate(timeout=5)
+                print(f"    - stdout: {stdout[:200]}...")
+                print(f"    - stderr: {stderr[:200]}...")
+            except:
+                print("    - 로그 읽기 실패")
+            server_process.terminate()
+            return
             
-            for prompt_idx, prompt in enumerate(self.test_prompts):
-                # 실제 변동을 시뮬레이션 (±15% 변동)
-                import random
-                tps_variation = random.uniform(0.85, 1.15)
-                time_variation = random.uniform(0.85, 1.15)
-                
-                tps = base_tps * tps_variation
-                inference_time = base_inference_time * time_variation
-                
-                run_results.append({
-                    'prompt_idx': prompt_idx,
-                    'prompt': prompt,
-                    'response': "Uzu 응답 (시뮬레이션)",
-                    'inference_time': inference_time,
-                    'tps': tps
-                })
-                
-                tps_values.append(tps)
-                inference_times.append(inference_time)
+        print("  Uzu 서버 시작 완료!")
+        
+        try:
+            all_runs = []
+            tps_values = []
+            inference_times = []
             
-            run_avg_tps = sum(r['tps'] for r in run_results) / len(run_results)
-            all_runs.append({
-                'run_index': run_idx,
-                'avg_tps': run_avg_tps,
-                'tests': run_results
-            })
-            print(f"    실행 {run_idx + 1} 평균 TPS: {run_avg_tps:.2f}")
+            for run_idx in range(self.num_runs):
+                print(f"  실행 {run_idx + 1}/{self.num_runs}...")
+                run_results = []
+                
+                for prompt_idx, prompt in enumerate(self.test_prompts):
+                    start_time = time.time()
+                    try:
+                        # OpenAI 호환 API 호출
+                        payload = {
+                            "model": "gemma-3-1b-it-uzu",
+                            "messages": [
+                                {"role": "user", "content": prompt}
+                            ],
+                            "max_tokens": self.max_tokens,
+                            "temperature": 0.7
+                        }
+                        
+                        response = requests.post(
+                            'http://localhost:8000/chat/completions',
+                            json=payload,
+                            timeout=120
+                        )
+                        inference_time = time.time() - start_time
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            response_text = data['choices'][0]['message']['content']
+                            
+                            # TPS 계산
+                            response_tokens = len(response_text.split()) if response_text else 0
+                            tps = response_tokens / inference_time if inference_time > 0 else 0
+                            
+                            # 응답 내용 로깅
+                            response_length = len(response_text.split()) if response_text else 0
+                            print(f"    프롬프트 {prompt_idx + 1}: {inference_time:.3f}초, {tps:.2f} TPS")
+                            print(f"    응답 길이: {response_length}단어, {len(response_text)}자")
+                            print(f"    응답 내용: {response_text}")
+                            print("    " + "-" * 60)
+                            
+                            run_results.append({
+                                'prompt_idx': prompt_idx,
+                                'prompt': prompt,
+                                'response': response_text,
+                                'inference_time': inference_time,
+                                'tps': tps
+                            })
+                            
+                            tps_values.append(tps)
+                            inference_times.append(inference_time)
+                        else:
+                            print(f"    에러 (프롬프트 {prompt_idx + 1}): HTTP {response.status_code}")
+                            print(f"    응답: {response.text[:200]}...")
+                            
+                    except requests.RequestException as e:
+                        print(f"    요청 에러 (프롬프트 {prompt_idx + 1}): {e}")
+                    except Exception as e:
+                        print(f"    일반 에러 (프롬프트 {prompt_idx + 1}): {e}")
+                
+                if run_results:
+                    run_avg_tps = sum(r['tps'] for r in run_results) / len(run_results)
+                    all_runs.append({
+                        'run_index': run_idx,
+                        'avg_tps': run_avg_tps,
+                        'tests': run_results
+                    })
+                    print(f"    실행 {run_idx + 1} 평균 TPS: {run_avg_tps:.2f}")
+        
+        finally:
+            # 서버 종료
+            print("  Uzu 서버 종료 중...")
+            server_process.terminate()
+            server_process.wait()
         
         # 통계 계산
         run_avg_tps_values = [run['avg_tps'] for run in all_runs]
@@ -540,7 +641,7 @@ class MultiRunBenchmarkRunner:
             print(f"시스템 정보 수집 오류: {e}")
         
         return system_info
-
+        
     def _generate_markdown_report(self, timestamp: str, table_header: str, table_rows: List[str], baseline_tps: float) -> str:
         """Markdown 리포트 생성"""
         system_info = self._get_system_info()
