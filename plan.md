@@ -18,7 +18,6 @@
 - [x] llama.cpp 빌드 및 설정 (Metal 지원 포함) - v5910, Metal 가속 확인 ✅
 - [x] PyTorch 환경 구성 (Apple Silicon 최적화) - v2.7.1, MPS 백엔드 활성화 ✅
 - [x] lalamo 설치 및 설정 - 모델 변환 도구 준비 완료 ✅
-- [ ] LM Studio 설치 (llama.cpp 성능 참조용)
 
 ### 1.3 개발 환경 구성
 - [x] 성능 측정 스크립트 개발 환경 준비 - Python 가상환경 구성 완료 ✅

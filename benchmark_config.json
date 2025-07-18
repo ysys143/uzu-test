@@ -34,5 +34,9 @@
     "directory": "logging",
     "level": "INFO",
     "console_output": true
+  },
+  "output": {
+    "report_directory": "report",
+    "data_directory": "output"
   }
 } 

@@ -27,7 +27,7 @@ import logging
 
 
 class MultiRunBenchmarkRunner:
-    def __init__(self, num_runs: int = None, config_file: str = "benchmark_config.json"):
+    def __init__(self, num_runs: int = None, config_file: str = "benchmark_config.json", quick_test: bool = False):
         # 설정 파일 로딩
         self.config = self._load_config(config_file)
         
@@ -36,12 +36,19 @@ class MultiRunBenchmarkRunner:
         self.max_tokens = int(os.getenv('BENCHMARK_MAX_TOKENS', self.config['benchmark']['max_tokens']))
         self.temperature = float(os.getenv('BENCHMARK_TEMPERATURE', self.config['benchmark']['temperature']))
         self.timeout_seconds = int(os.getenv('BENCHMARK_TIMEOUT', self.config['benchmark']['timeout_seconds']))
+        self.quick_test = quick_test or os.getenv('BENCHMARK_QUICK_TEST', '').lower() in ('true', '1', 'yes')
         
         # 로그 파일 설정
         logging_config = self.config['logging']
         os.makedirs(logging_config['directory'], exist_ok=True)
+        
+        # 출력 디렉토리 생성
+        os.makedirs('report', exist_ok=True)
+        os.makedirs('output', exist_ok=True)
+        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_filename = f"{logging_config['directory']}/benchmark_detailed_{timestamp}.log"
+        self.timestamp = timestamp
         
         # 로깅 설정
         handlers = [logging.FileHandler(self.log_filename, encoding='utf-8')]
@@ -59,24 +66,29 @@ class MultiRunBenchmarkRunner:
         from benchmark_prompts import get_all_prompts, SYSTEM_PROMPT
         all_prompts = get_all_prompts()
         
-        # 다양한 길이의 프롬프트 10개 선택 (더 포괄적인 테스트)
-        self.test_prompts = [
-            # 짧은 프롬프트 (4개)
-            all_prompts[0],   # 파이썬 리스트와 튜플 차이
-            all_prompts[1],   # HTTP와 HTTPS 차이  
-            all_prompts[4],   # Git과 GitHub 차이
-            all_prompts[8],   # 머신러닝과 딥러닝 차이
-            
-            # 중간 프롬프트 (3개)
-            all_prompts[18],  # 데이터 처리 라이브러리
-            all_prompts[22],  # 소프트웨어 아키텍처 패턴
-            all_prompts[25],  # 클라우드 서비스 비교
-            
-            # 긴 프롬프트 (3개)  
-            all_prompts[34],  # 웹 개발 스택
-            all_prompts[40],  # 분산 시스템 설계
-            all_prompts[45],  # 데이터 엔지니어링 파이프라인
-        ]
+        # 빠른 테스트 모드 확인
+        if self.quick_test:
+            # 빠른 테스트: 첫 번째 프롬프트만 사용
+            self.test_prompts = [all_prompts[0]]  # 파이썬 리스트와 튜플 차이
+        else:
+            # 정식 테스트: 다양한 길이의 프롬프트 10개 선택 (더 포괄적인 테스트)
+            self.test_prompts = [
+                # 짧은 프롬프트 (4개)
+                all_prompts[0],   # 파이썬 리스트와 튜플 차이
+                all_prompts[1],   # HTTP와 HTTPS 차이  
+                all_prompts[4],   # Git과 GitHub 차이
+                all_prompts[8],   # 머신러닝과 딥러닝 차이
+                
+                # 중간 프롬프트 (3개)
+                all_prompts[18],  # 데이터 처리 라이브러리
+                all_prompts[22],  # 소프트웨어 아키텍처 패턴
+                all_prompts[25],  # 클라우드 서비스 비교
+                
+                # 긴 프롬프트 (3개)  
+                all_prompts[34],  # 웹 개발 스택
+                all_prompts[40],  # 분산 시스템 설계
+                all_prompts[45],  # 데이터 엔지니어링 파이프라인
+            ]
         
         # 시스템 프롬프트 설정 (환경변수 또는 설정 파일에서 오버라이드 가능)
         system_prompt_override = os.getenv('BENCHMARK_SYSTEM_PROMPT') or self.config['benchmark'].get('system_prompt_override')
@@ -114,7 +126,8 @@ class MultiRunBenchmarkRunner:
                 "llamacpp": {"enabled": True, "model_path": "./models/gemma-3-1b-it-gguf-llama/model.gguf", "ngl": 99, "chat_template": "gemma"},
                 "uzu": {"enabled": True, "model_path": "./models/gemma-3-1b-it-uzu", "port": 51839, "server_timeout": 60}
             },
-            "logging": {"directory": "logging", "level": "INFO", "console_output": True}
+            "logging": {"directory": "logging", "level": "INFO", "console_output": True},
+            "output": {"report_directory": "report", "data_directory": "output"}
         }
         
     def log_response_details(self, engine_name: str, prompt_idx: int, inference_time: float, 
@@ -293,13 +306,9 @@ class MultiRunBenchmarkRunner:
                 full_prompt = f"{self.system_prompt}\n\n사용자 질문: {prompt}"
                 
                 ollama_config = self.config['engines']['ollama']
-                cmd = [
-                    'ollama', 'run', ollama_config['model_name'],
-                    '--parameter', f'num_predict={self.max_tokens}',
-                    '--parameter', f'temperature={self.temperature}'
-                ]
+                cmd = ['ollama', 'run', ollama_config['model_name']]
                 if ollama_config.get('verbose', False):
-                    cmd.insert(2, '--verbose')
+                    cmd.append('--verbose')
                 
                 start_time = time.time()
                 try:
@@ -503,14 +512,11 @@ class MultiRunBenchmarkRunner:
         env = os.environ.copy()
         env['ROCKET_PORT'] = str(uzu_config['port'])
         
-        # 서버 로그를 별도 파일로 저장 (logging/ 디렉토리에)
-        server_log_file = f"logging/uzu_server_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-        log_file = open(server_log_file, 'w', encoding='utf-8')
-        
+        # Uzu 서버 시작 (로그는 메인 로그에 통합)
         server_process = subprocess.Popen(
             ['./uzu/target/release/uzu_cli', 'serve', uzu_config['model_path']],
-            stdout=log_file,
-            stderr=subprocess.STDOUT,  # stderr도 같은 파일로
+            stdout=subprocess.DEVNULL,  # 서버 출력 숨김
+            stderr=subprocess.DEVNULL,   # 서버 에러 숨김
             text=True,
             env=env
         )
@@ -624,12 +630,10 @@ class MultiRunBenchmarkRunner:
                     print(f"    실행 {run_idx + 1} 평균 TPS: {run_avg_tps:.2f}")
         
         finally:
-            # 서버 종료 (test_uzu_only.py 방식)
+            # 서버 종료
             print("  서버 종료 중...")
             server_process.terminate()
             server_process.wait()
-            log_file.close()  # 로그 파일 닫기
-            self.logger.info(f"  Uzu 서버 로그 저장됨: {server_log_file}")
             print("  ✅ 서버 종료 완료")
         
         # 통계 계산
@@ -692,8 +696,9 @@ class MultiRunBenchmarkRunner:
         # Markdown 리포트 생성
         md_content = self._generate_markdown_report(timestamp, table_header, table_rows, baseline_tps)
         
-        # Markdown 파일 저장 (logging/ 디렉토리에)
-        md_file = f'logging/benchmark_report_{self.num_runs}runs.md'
+        # Markdown 파일 저장 (report/ 디렉토리에)
+        quick_suffix = "_quick" if self.quick_test else ""
+        md_file = f'report/benchmark_report_{self.num_runs}runs{quick_suffix}_{self.timestamp}.md'
         with open(md_file, 'w', encoding='utf-8') as f:
             f.write(md_content)
         
@@ -723,14 +728,15 @@ class MultiRunBenchmarkRunner:
                 'relative_performance': data.get('statistics', {}).get('tps', {}).get('mean', 0) / baseline_tps if baseline_tps > 0 else 0
             }
         
-        # JSON 파일 저장 (logging/ 디렉토리에)
-        json_file = f'logging/benchmark_results_multi_run_{self.num_runs}.json'
+        # JSON 파일 저장 (output/ 디렉토리에)
+        json_file = f'output/benchmark_results_{self.num_runs}runs{quick_suffix}_{self.timestamp}.json'
         with open(json_file, 'w', encoding='utf-8') as f:
             json.dump(detailed_results, f, indent=2, ensure_ascii=False)
         
         print(f"\n📊 상세 결과가 {json_file}에 저장되었습니다.")
         print(f"📋 벤치마크 리포트가 {md_file}에 저장되었습니다.")
         print(f"📈 총 {sum(len(data.get('all_runs', [])) for data in self.results.values())}회의 개별 실행 결과가 포함되었습니다.")
+        print(f"📝 상세 로그: {self.log_filename}")
         
     def _get_system_info(self) -> Dict[str, str]:
         """시스템 정보 수집"""
@@ -894,8 +900,10 @@ class MultiRunBenchmarkRunner:
             engine_name = self.results[engine].get('engine', engine)
             md_content += f"{rank}. **{engine_name}**: 표준편차 {std:.2f} TPS\n"
         
+        quick_suffix = "_quick" if self.quick_test else ""
         md_content += f"\n---\n\n*벤치마크 실행 시간: {timestamp}*\n"
-        md_content += f"*생성된 파일: logging/benchmark_results_multi_run_{self.num_runs}.json*\n"
+        md_content += f"*JSON 데이터: output/benchmark_results_{self.num_runs}runs{quick_suffix}_{self.timestamp}.json*\n"
+        md_content += f"*상세 로그: {self.log_filename}*\n"
         
         return md_content
         
@@ -943,20 +951,51 @@ if __name__ == "__main__":
     # 작업 디렉토리 변경
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     
-    # 실행 횟수 인자 처리
-    num_runs = 10
-    if len(sys.argv) > 1:
-        try:
-            num_runs = int(sys.argv[1])
-            if num_runs < 1:
-                raise ValueError("실행 횟수는 1 이상이어야 합니다.")
-        except ValueError as e:
-            print(f"오류: {e}")
-            print("사용법: python benchmark_multi_run.py [실행횟수]")
-            print("예: python benchmark_multi_run.py 5")
-            sys.exit(1)
+    # 명령행 인자 처리
+    num_runs = None
+    quick_test = False
     
-    print(f"재솔님, {num_runs}회 반복 벤치마크를 시작합니다!")
+    # 인자 파싱
+    args = sys.argv[1:]
+    for arg in args:
+        if arg.lower() in ('quick', 'q', '--quick', '-q'):
+            quick_test = True
+        else:
+            try:
+                num_runs = int(arg)
+                if num_runs < 1:
+                    raise ValueError("실행 횟수는 1 이상이어야 합니다.")
+            except ValueError:
+                print(f"오류: 잘못된 인자 '{arg}'")
+                print("사용법: python bench_run.py [실행횟수] [quick]")
+                print("예시:")
+                print("  python bench_run.py 5        # 5회 반복, 전체 프롬프트")
+                print("  python bench_run.py 1 quick  # 1회 반복, 프롬프트 1개만")
+                print("  python bench_run.py quick    # 기본 반복, 프롬프트 1개만")
+                sys.exit(1)
     
-    runner = MultiRunBenchmarkRunner(num_runs=num_runs)
+    # MultiRunBenchmarkRunner에서 우선순위에 따라 결정됨:
+    # 1. 명령행 인자 (num_runs) > 2. 환경변수 > 3. 설정 파일 > 4. 기본값
+    runner = MultiRunBenchmarkRunner(num_runs=num_runs, quick_test=quick_test)
+    actual_runs = runner.num_runs
+    
+    test_mode = "빠른 테스트" if quick_test else "정식 벤치마크"
+    print(f"{actual_runs}회 반복 {test_mode}를 시작합니다!")
+    
+    if num_runs:
+        print(f"  (명령행 인자로 설정됨)")
+    elif os.getenv('BENCHMARK_NUM_RUNS'):
+        print(f"  (환경변수 BENCHMARK_NUM_RUNS={os.getenv('BENCHMARK_NUM_RUNS')})")
+    else:
+        print(f"  (설정 파일 기본값)")
+    
+    if quick_test:
+        print(f"  ⚡ 빠른 테스트 모드: 프롬프트 1개만 사용")
+    
+    print(f"📊 벤치마크 구성:")
+    print(f"  - 프롬프트 수: {len(runner.test_prompts)}개")
+    print(f"  - 활성화된 엔진: {len([name for name, config in runner.config['engines'].items() if config.get('enabled', True)])}개")
+    print(f"  - 각 엔진당 실행: {actual_runs}회")
+    print(f"  - 총 실행 횟수: {len(runner.test_prompts)} × {actual_runs} × {len([name for name, config in runner.config['engines'].items() if config.get('enabled', True)])} = {len(runner.test_prompts) * actual_runs * len([name for name, config in runner.config['engines'].items() if config.get('enabled', True)])}회")
+    print()
     runner.run_all_tests() 
