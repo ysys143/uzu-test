@@ -124,26 +124,31 @@ class MultiRunBenchmarkRunner:
                 "pytorch": {"enabled": True, "device": "mps", "torch_dtype": "float16"},
                 "ollama": {"enabled": True, "model_name": "gemma-3-1b-it-bench", "verbose": True},
                 "llamacpp": {"enabled": True, "model_path": "./models/gemma-3-1b-it-gguf-llama/model.gguf", "ngl": 99, "chat_template": "gemma"},
-                "uzu": {"enabled": True, "model_path": "./models/gemma-3-1b-it-uzu", "port": 51839, "server_timeout": 60}
+                "uzu": {"enabled": False, "model_path": "./models/gemma-3-1b-it-uzu", "port": 51839, "server_timeout": 60, "note": "대화형 CLI만 지원하여 스크립트 자동화 불가능"}
             },
             "logging": {"directory": "logging", "level": "INFO", "console_output": True},
             "output": {"report_directory": "report", "data_directory": "output"}
         }
         
     def log_response_details(self, engine_name: str, prompt_idx: int, inference_time: float, 
-                           tps: float, response_text: str, tokens_count: int = None):
+                           tps: float, response_text: str, tokens_count: int = None, internal_tps: float = 0):
         """응답 상세 정보를 로그 파일에 기록"""
         response_length = len(response_text.split()) if response_text else 0
         
         # 화면에는 간단한 정보만
-        print(f"    프롬프트 {prompt_idx + 1}: {inference_time:.3f}초, {tps:.2f} TPS")
+        if internal_tps > 0:
+            print(f"    프롬프트 {prompt_idx + 1}: {inference_time:.3f}초, {tps:.2f} TPS (통일), {internal_tps:.2f} TPS (내부)")
+        else:
+            print(f"    프롬프트 {prompt_idx + 1}: {inference_time:.3f}초, {tps:.2f} TPS")
         
         # 로그 파일에는 상세 정보
         self.logger.info(f"[{engine_name}] 프롬프트 {prompt_idx + 1}")
         self.logger.info(f"[{engine_name}] 추론 시간: {inference_time:.3f}초")
         if tokens_count:
-            self.logger.info(f"[{engine_name}] 생성 토큰: {tokens_count}개")
-        self.logger.info(f"[{engine_name}] TPS: {tps:.2f}")
+            self.logger.info(f"[{engine_name}] 생성 토큰 (추정): {tokens_count}개")
+        self.logger.info(f"[{engine_name}] TPS (통일된 계산): {tps:.2f}")
+        if internal_tps > 0:
+            self.logger.info(f"[{engine_name}] TPS (엔진 내부): {internal_tps:.2f}")
         self.logger.info(f"[{engine_name}] 응답 길이: {response_length}단어, {len(response_text)}자")
         self.logger.info(f"[{engine_name}] 응답 내용: {response_text}")
         self.logger.info(f"[{engine_name}] " + "-" * 60)
@@ -325,15 +330,15 @@ class MultiRunBenchmarkRunner:
                         output_lines = result.stdout.strip().split('\n')
                         stderr_lines = result.stderr.strip().split('\n')
                         response = ""
-                        eval_rate = 0
                         
-                        # stderr에서 성능 정보 파싱
+                        # stderr에서 내부 성능 정보 파싱 (참고용)
+                        internal_eval_rate = 0
                         for line in stderr_lines:
                             if 'eval rate:' in line:
                                 try:
                                     # "eval rate:     77.72 tokens/s" 형식 파싱
                                     parts = line.split('eval rate:')[1].strip()
-                                    eval_rate = float(parts.split('tokens/s')[0].strip())
+                                    internal_eval_rate = float(parts.split('tokens/s')[0].strip())
                                 except Exception as e:
                                     print(f"      성능 파싱 오류: {line} -> {e}")
                                     pass
@@ -344,18 +349,28 @@ class MultiRunBenchmarkRunner:
                                 if line.strip() and not line.startswith('>>>'):
                                     response += line + " "
                         
-                        # 응답 상세 로깅
-                        self.log_response_details("Ollama", prompt_idx, inference_time, eval_rate, response)
+                        response = response.strip()
+                        
+                        # 공정한 비교를 위해 실제 생성된 토큰 수 계산 (llama.cpp와 동일한 방식)
+                        estimated_tokens = self.estimate_tokens(response)
+                        
+                        # 통일된 TPS 계산: 생성된 토큰 수 / 전체 추론 시간
+                        tps = estimated_tokens / inference_time if inference_time > 0 else 0
+                        
+                        # 응답 상세 로깅 (내부 eval_rate도 포함)
+                        self.log_response_details("Ollama", prompt_idx, inference_time, tps, response, estimated_tokens, internal_eval_rate)
                         
                         run_results.append({
                             'prompt_idx': prompt_idx,
                             'prompt': prompt,
-                            'response': response.strip(),
+                            'response': response,
                             'inference_time': inference_time,
-                            'tps': eval_rate
+                            'tokens_generated': estimated_tokens,
+                            'tps': tps,
+                            'internal_tps': internal_eval_rate  # 참고용
                         })
                         
-                        tps_values.append(eval_rate)
+                        tps_values.append(tps)
                         inference_times.append(inference_time)
                     else:
                         print(f"    에러 (프롬프트 {prompt_idx + 1}): {result.stderr}")
@@ -430,32 +445,37 @@ class MultiRunBenchmarkRunner:
                     inference_time = time.time() - start_time
                     
                     if result.returncode == 0:
-                        output_lines = result.stderr.split('\n')
-                        tps = 0
+                        response = result.stdout.strip()
                         
-                        # 성능 정보 파싱 - "76.85 tokens per second" 형식 찾기
+                        # 공정한 비교를 위해 실제 생성된 토큰 수 계산
+                        estimated_tokens = self.estimate_tokens(response)
+                        
+                        # 통일된 TPS 계산: 생성된 토큰 수 / 전체 추론 시간
+                        tps = estimated_tokens / inference_time if inference_time > 0 else 0
+                        
+                        # 참고용으로 llama.cpp 내부 TPS도 파싱 (로그에만 사용)
+                        internal_tps = 0
+                        output_lines = result.stderr.split('\n')
                         for line in output_lines:
                             if 'tokens per second' in line and 'eval time' in line:
                                 try:
-                                    # "   13.01 ms per token,    76.85 tokens per second)" 형식 파싱
                                     parts = line.split('tokens per second')[0]
-                                    tps = float(parts.split(',')[-1].strip())
+                                    internal_tps = float(parts.split(',')[-1].strip())
                                     break
-                                except Exception as e:
-                                    print(f"      TPS 파싱 오류: {line} -> {e}")
+                                except Exception:
                                     pass
                         
-                        response = result.stdout.strip()
-                        
-                        # 응답 상세 로깅
-                        self.log_response_details("llama.cpp", prompt_idx, inference_time, tps, response)
+                        # 응답 상세 로깅 (내부 TPS도 포함)
+                        self.log_response_details("llama.cpp", prompt_idx, inference_time, tps, response, estimated_tokens, internal_tps)
                         
                         run_results.append({
                             'prompt_idx': prompt_idx,
                             'prompt': prompt,
                             'response': response,
                             'inference_time': inference_time,
-                            'tps': tps
+                            'tokens_generated': estimated_tokens,
+                            'tps': tps,
+                            'internal_tps': internal_tps  # 참고용
                         })
                         
                         tps_values.append(tps)
@@ -786,12 +806,12 @@ class MultiRunBenchmarkRunner:
         return system_info
         
     def _generate_markdown_report(self, timestamp: str, table_header: str, table_rows: List[str], baseline_tps: float) -> str:
-        """Markdown 리포트 생성"""
+        """TPS와 Latency를 모두 고려한 종합적인 Markdown 리포트 생성"""
         system_info = self._get_system_info()
         
-        md_content = f"""# Uzu AI 추론 엔진 성능 벤치마크 결과
+        md_content = f"""# Uzu AI 추론 엔진 종합 성능 분석 리포트
 
-## 시스템 정보
+## 📊 시스템 정보
 - **모델**: {system_info.get('model', 'Unknown')} ({system_info.get('model_id', 'Unknown')})
 - **프로세서**: {system_info.get('processor', 'Unknown')}
 - **CPU 코어**: {system_info.get('cores', 'Unknown')}
@@ -799,21 +819,30 @@ class MultiRunBenchmarkRunner:
 - **운영체제**: macOS {system_info.get('os_version', 'Unknown')} ({system_info.get('build_version', 'Unknown')})
 - **Python**: {system_info.get('python_version', 'Unknown')}
 
-## 벤치마크 정보
+## ⚙️ 벤치마크 구성
 - **실행 시간**: {timestamp}
 - **반복 횟수**: {self.num_runs}회
 - **테스트 프롬프트**: {len(self.test_prompts)}개
 - **최대 토큰**: {self.max_tokens}개
+- **온도 설정**: {self.temperature} (일관된 응답)
 - **총 실행 횟수**: {len(self.test_prompts) * self.num_runs * len(self.results)}회
 
-## 성능 요약
+## 🚀 성능 요약
 
-| 엔진 | 평균 TPS | TPS범위 | 표준편차 | 상대 성능 |
-|------|----------|----------|----------|----------|
+### 처리량 성능 (TPS)
+
+| 순위 | 엔진 | 평균 TPS | TPS 범위 | 표준편차 | 상대 성능 |
+|------|------|----------|----------|----------|----------|
 """
         
-        # 테이블 데이터 변환
-        for engine, data in self.results.items():
+        # TPS 기준 정렬
+        sorted_engines_tps = sorted(
+            [(engine, data) for engine, data in self.results.items()], 
+            key=lambda x: x[1].get('statistics', {}).get('tps', {}).get('mean', 0), 
+            reverse=True
+        )
+        
+        for rank, (engine, data) in enumerate(sorted_engines_tps, 1):
             engine_name = data.get('engine', engine)
             tps_stats = data.get('statistics', {}).get('tps', {})
             
@@ -824,11 +853,35 @@ class MultiRunBenchmarkRunner:
             relative = avg_tps / baseline_tps if baseline_tps > 0 else 0
             
             tps_range = f"{min_tps:.1f}-{max_tps:.1f}"
+            md_content += f"| {rank}위 | **{engine_name}** | {avg_tps:.2f} | {tps_range} | {std_tps:.2f} | **{relative:.1f}x** |\n"
+        
+        # Latency 기준 성능 표
+        md_content += "\n### 응답 속도 성능 (Latency)\n\n"
+        md_content += "| 순위 | 엔진 | 평균 Latency (초) | Latency 범위 | 표준편차 | 일관성 |\n"
+        md_content += "|------|------|-------------------|--------------|----------|--------|\n"
+        
+        # Latency 기준 정렬 (낮은 순)
+        sorted_engines_latency = sorted(
+            [(engine, data) for engine, data in self.results.items()], 
+            key=lambda x: x[1].get('statistics', {}).get('inference_time', {}).get('mean', float('inf'))
+        )
+        
+        for rank, (engine, data) in enumerate(sorted_engines_latency, 1):
+            engine_name = data.get('engine', engine)
+            latency_stats = data.get('statistics', {}).get('inference_time', {})
             
-            md_content += f"| {engine_name} | {avg_tps:.2f} | {tps_range} | {std_tps:.2f} | {relative:.1f}x |\n"
+            avg_latency = latency_stats.get('mean', 0)
+            min_latency = latency_stats.get('min', 0)
+            max_latency = latency_stats.get('max', 0)
+            std_latency = latency_stats.get('std', 0)
+            
+            latency_range = f"{min_latency:.2f}-{max_latency:.2f}"
+            consistency = "높음" if std_latency < avg_latency * 0.2 else "보통" if std_latency < avg_latency * 0.5 else "낮음"
+            
+            md_content += f"| {rank}위 | **{engine_name}** | {avg_latency:.3f} | {latency_range} | {std_latency:.3f} | {consistency} |\n"
         
         # 상세 통계 추가
-        md_content += "\n## 상세 통계\n\n"
+        md_content += "\n## 📈 상세 성능 통계\n\n"
         
         for engine, data in self.results.items():
             engine_name = data.get('engine', engine)
@@ -836,74 +889,114 @@ class MultiRunBenchmarkRunner:
             inference_stats = data.get('statistics', {}).get('inference_time', {})
             
             md_content += f"### {engine_name}\n\n"
-            md_content += f"**TPS (Tokens Per Second)**\n"
-            md_content += f"- 평균: {tps_stats.get('mean', 0):.2f}\n"
-            md_content += f"- 중간값: {tps_stats.get('median', 0):.2f}\n"
-            md_content += f"- 최소값: {tps_stats.get('min', 0):.2f}\n"
-            md_content += f"- 최대값: {tps_stats.get('max', 0):.2f}\n"
-            md_content += f"- 표준편차: {tps_stats.get('std', 0):.2f}\n\n"
             
-            md_content += f"**추론 시간 (초)**\n"
-            md_content += f"- 평균: {inference_stats.get('mean', 0):.3f}\n"
-            md_content += f"- 중간값: {inference_stats.get('median', 0):.3f}\n"
-            md_content += f"- 최소값: {inference_stats.get('min', 0):.3f}\n"
-            md_content += f"- 최대값: {inference_stats.get('max', 0):.3f}\n"
-            md_content += f"- 표준편차: {inference_stats.get('std', 0):.3f}\n\n"
+            # 양쪽 지표를 테이블로 비교
+            md_content += "| 지표 | 평균 | 중간값 | 최소값 | 최대값 | 표준편차 |\n"
+            md_content += "|------|------|--------|--------|--------|---------|\n"
+            md_content += f"| **TPS** | {tps_stats.get('mean', 0):.2f} | {tps_stats.get('median', 0):.2f} | {tps_stats.get('min', 0):.2f} | {tps_stats.get('max', 0):.2f} | {tps_stats.get('std', 0):.2f} |\n"
+            md_content += f"| **Latency (초)** | {inference_stats.get('mean', 0):.3f} | {inference_stats.get('median', 0):.3f} | {inference_stats.get('min', 0):.3f} | {inference_stats.get('max', 0):.3f} | {inference_stats.get('std', 0):.3f} |\n\n"
+        
+        # 성능 분석 섹션 추가
+        md_content += "## 🔍 성능 분석\n\n"
+        
+        # 최고/최저 성능 엔진 식별
+        best_tps_engine = sorted_engines_tps[0][0]
+        best_latency_engine = sorted_engines_latency[0][0]
+        
+        best_tps_name = self.results[best_tps_engine].get('engine', best_tps_engine)
+        best_latency_name = self.results[best_latency_engine].get('engine', best_latency_engine)
+        
+        md_content += f"### 성능 우수 엔진\n\n"
+        md_content += f"- **최고 처리량**: {best_tps_name} ({self.results[best_tps_engine]['statistics']['tps']['mean']:.2f} TPS)\n"
+        md_content += f"- **최단 응답시간**: {best_latency_name} ({self.results[best_latency_engine]['statistics']['inference_time']['mean']:.3f}초)\n\n"
+        
+        # 성능 일관성 분석
+        md_content += "### 성능 안정성 분석\n\n"
+        stability_analysis = []
+        for engine, data in self.results.items():
+            engine_name = data.get('engine', engine)
+            tps_cv = data['statistics']['tps']['std'] / data['statistics']['tps']['mean'] if data['statistics']['tps']['mean'] > 0 else 0
+            latency_cv = data['statistics']['inference_time']['std'] / data['statistics']['inference_time']['mean'] if data['statistics']['inference_time']['mean'] > 0 else 0
+            stability_analysis.append((engine_name, tps_cv, latency_cv))
+        
+        # CV(변동계수) 기준 정렬
+        stability_analysis.sort(key=lambda x: (x[1] + x[2]) / 2)
+        
+        for rank, (engine_name, tps_cv, latency_cv) in enumerate(stability_analysis, 1):
+            stability_rating = "높음" if (tps_cv + latency_cv) / 2 < 0.1 else "보통" if (tps_cv + latency_cv) / 2 < 0.3 else "낮음"
+            md_content += f"{rank}. **{engine_name}**: TPS 변동성 {tps_cv:.1%}, Latency 변동성 {latency_cv:.1%} (안정성: {stability_rating})\n"
+        
+        # 시나리오별 권장사항
+        md_content += "\n## 🎯 시나리오별 권장 엔진\n\n"
+        
+        md_content += "### 처리량 우선 (배치 작업)\n"
+        for rank, (engine, data) in enumerate(sorted_engines_tps[:3], 1):
+            engine_name = data.get('engine', engine)
+            avg_tps = data['statistics']['tps']['mean']
+            avg_latency = data['statistics']['inference_time']['mean']
+            md_content += f"{rank}. **{engine_name}**: {avg_tps:.2f} TPS, {avg_latency:.1f}초 지연\n"
+        
+        md_content += "\n### 응답속도 우선 (실시간 대화)\n"
+        for rank, (engine, data) in enumerate(sorted_engines_latency[:3], 1):
+            engine_name = data.get('engine', engine)
+            avg_tps = data['statistics']['tps']['mean']
+            avg_latency = data['statistics']['inference_time']['mean']
+            md_content += f"{rank}. **{engine_name}**: {avg_latency:.3f}초 지연, {avg_tps:.1f} TPS\n"
+        
+        md_content += "\n### 안정성 우선 (프로덕션)\n"
+        for rank, (engine_name, tps_cv, latency_cv) in enumerate(stability_analysis[:3], 1):
+            overall_stability = (tps_cv + latency_cv) / 2
+            md_content += f"{rank}. **{engine_name}**: 전체 변동성 {overall_stability:.1%}\n"
         
         # 테스트 프롬프트 목록 추가
-        md_content += "## 테스트 프롬프트\n\n"
+        md_content += "\n## 📝 테스트 프롬프트\n\n"
         for i, prompt in enumerate(self.test_prompts, 1):
             md_content += f"{i}. \"{prompt}\"\n"
         
         # 실행별 결과 요약
-        md_content += "\n## 실행별 평균 TPS\n\n"
+        if self.num_runs > 1:
+            md_content += "\n## 📊 실행별 성능 추이\n\n"
+            for engine, data in self.results.items():
+                engine_name = data.get('engine', engine)
+                md_content += f"### {engine_name}\n\n"
+                
+                all_runs = data.get('all_runs', [])
+                if all_runs:
+                    md_content += "| 실행 | 평균 TPS | 평균 Latency (초) |\n"
+                    md_content += "|------|----------|-------------------|\n"
+                    for run in all_runs:
+                        run_idx = run.get('run_index', 0) + 1
+                        avg_tps = run.get('avg_tps', 0)
+                        # 해당 실행의 평균 latency 계산
+                        tests = run.get('tests', [])
+                        avg_latency = sum(t.get('inference_time', 0) for t in tests) / len(tests) if tests else 0
+                        md_content += f"| {run_idx} | {avg_tps:.2f} | {avg_latency:.3f} |\n"
+                    md_content += "\n"
+        
+        # 결론 및 권장사항
+        md_content += "## 📋 종합 결론\n\n"
+        
+        # 종합 우수 엔진 선정 (TPS와 Latency 가중 평균)
+        overall_scores = []
         for engine, data in self.results.items():
             engine_name = data.get('engine', engine)
-            md_content += f"### {engine_name}\n\n"
-            
-            all_runs = data.get('all_runs', [])
-            if all_runs:
-                md_content += "| 실행 | 평균 TPS |\n"
-                md_content += "|------|----------|\n"
-                for run in all_runs:
-                    run_idx = run.get('run_index', 0) + 1
-                    avg_tps = run.get('avg_tps', 0)
-                    md_content += f"| {run_idx} | {avg_tps:.2f} |\n"
-                md_content += "\n"
+            tps_score = data['statistics']['tps']['mean'] / max(d['statistics']['tps']['mean'] for d in self.results.values())
+            latency_score = min(d['statistics']['inference_time']['mean'] for d in self.results.values()) / data['statistics']['inference_time']['mean']
+            overall_score = (tps_score + latency_score) / 2  # 균등 가중치
+            overall_scores.append((engine_name, overall_score, tps_score, latency_score))
         
-        # 결론
-        md_content += "## 결론\n\n"
+        overall_scores.sort(key=lambda x: x[1], reverse=True)
         
-        # 성능 순위
-        sorted_engines = sorted(
-            [(engine, data.get('statistics', {}).get('tps', {}).get('mean', 0)) 
-             for engine, data in self.results.items()], 
-            key=lambda x: x[1], 
-            reverse=True
-        )
-        
-        md_content += "**성능 순위 (평균 TPS 기준)**\n\n"
-        for rank, (engine, avg_tps) in enumerate(sorted_engines, 1):
-            engine_name = self.results[engine].get('engine', engine)
-            relative = avg_tps / baseline_tps if baseline_tps > 0 else 0
-            md_content += f"{rank}. **{engine_name}**: {avg_tps:.2f} TPS ({relative:.1f}x)\n"
-        
-        # 안정성 분석
-        md_content += "\n**성능 안정성 (표준편차 기준)**\n\n"
-        sorted_stability = sorted(
-            [(engine, data.get('statistics', {}).get('tps', {}).get('std', 0)) 
-             for engine, data in self.results.items()], 
-            key=lambda x: x[1]
-        )
-        
-        for rank, (engine, std) in enumerate(sorted_stability, 1):
-            engine_name = self.results[engine].get('engine', engine)
-            md_content += f"{rank}. **{engine_name}**: 표준편차 {std:.2f} TPS\n"
+        md_content += "**종합 성능 순위** (TPS와 Latency 균등 가중치)\n\n"
+        for rank, (engine_name, overall_score, tps_score, latency_score) in enumerate(overall_scores, 1):
+            md_content += f"{rank}. **{engine_name}**: 종합 점수 {overall_score:.3f} (처리량: {tps_score:.3f}, 응답속도: {latency_score:.3f})\n"
         
         quick_suffix = "_quick" if self.quick_test else ""
-        md_content += f"\n---\n\n*벤치마크 실행 시간: {timestamp}*\n"
-        md_content += f"*JSON 데이터: output/benchmark_results_{self.num_runs}runs{quick_suffix}_{self.timestamp}.json*\n"
-        md_content += f"*상세 로그: {self.log_filename}*\n"
+        md_content += f"\n---\n\n"
+        md_content += f"**데이터 파일**\n"
+        md_content += f"- JSON 데이터: `output/benchmark_results_{self.num_runs}runs{quick_suffix}_{self.timestamp}.json`\n"
+        md_content += f"- 상세 로그: `{self.log_filename}`\n\n"
+        md_content += f"*리포트 생성 시간: {timestamp}*\n"
         
         return md_content
         
@@ -943,6 +1036,37 @@ class MultiRunBenchmarkRunner:
                 print()
         
         self.generate_report()
+
+    def estimate_tokens(self, text: str) -> int:
+        """텍스트에서 토큰 수를 추정하는 함수
+        
+        실제 토큰화기를 사용하지 않고 간단한 휴리스틱으로 추정
+        상대적 비교에는 충분히 정확함
+        """
+        if not text.strip():
+            return 1
+            
+        # 공백으로 단어 분할
+        words = text.split()
+        estimated_tokens = 0
+        
+        for word in words:
+            # 한글 문자 수 계산 (0xAC00-0xD7A3: 한글 완성형)
+            korean_chars = sum(1 for c in word if 0xAC00 <= ord(c) <= 0xD7A3)
+            # 영문/숫자/기타 문자 수
+            other_chars = len(word) - korean_chars
+            
+            # 토큰 추정:
+            # - 한글: 평균 1.5 토큰/글자 (종성 없는 글자는 1토큰, 있는 글자는 2토큰)
+            # - 영문: 평균 0.25 토큰/글자 (4글자 = 1토큰 정도)
+            # - 구두점: 각각 1토큰
+            estimated_tokens += korean_chars * 1.5 + other_chars * 0.25
+            
+            # 구두점 처리 (별도 토큰으로 계산)
+            punctuation_count = sum(1 for c in word if c in '.,!?;:()[]{}\"\'`~@#$%^&*-+=|\\/<>')
+            estimated_tokens += punctuation_count * 0.5
+        
+        return max(int(estimated_tokens), 1)
 
 
 if __name__ == "__main__":

@@ -6,29 +6,43 @@
     "timeout_seconds": 120,
     "system_prompt_override": null
   },
-  "engines": {
+  "servers": {
     "pytorch": {
       "enabled": true,
-      "device": "mps",
-      "torch_dtype": "float16"
+      "port": 8001,
+      "model_path": "./models/gemma-3-1b-it",
+      "startup_timeout": 60,
+      "api_endpoint": "/chat/completions"
     },
     "ollama": {
       "enabled": true,
+      "port": 11434,
       "model_name": "gemma-3-1b-it-bench",
-      "verbose": true
+      "startup_timeout": 30,
+      "api_endpoint": "/api/generate"
     },
     "llamacpp": {
       "enabled": true,
+      "port": 8002,
       "model_path": "./models/gemma-3-1b-it-gguf-llama/model.gguf",
+      "startup_timeout": 30,
+      "api_endpoint": "/completion",
       "ngl": 99,
       "chat_template": "gemma"
     },
     "uzu": {
       "enabled": true,
+      "port": 8000,
       "model_path": "./models/gemma-3-1b-it-uzu",
-      "port": 51839,
-      "server_timeout": 60
+      "startup_timeout": 60,
+      "api_endpoint": "/chat/completions"
     }
+  },
+  "engines": {
+    "pytorch": {"enabled": true, "device": "mps", "torch_dtype": "float16"},
+    "ollama": {"enabled": true, "model_name": "gemma-3-1b-it-bench", "verbose": true},
+    "llamacpp": {"enabled": true, "model_path": "./models/gemma-3-1b-it-gguf-llama/model.gguf", "ngl": 99, "chat_template": "gemma"},
+    "uzu": {"enabled": false, "model_path": "./models/gemma-3-1b-it-uzu", "port": 51839, "server_timeout": 60, "note": "대화형 CLI만 지원하여 스크립트 자동화 불가능"}
   },
   "logging": {
     "directory": "logging",
